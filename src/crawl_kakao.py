@@ -237,16 +237,48 @@ def collect_place_reviews(driver, place, area, category, review_limit):
 
 def write_rows(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as f:
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    with temp_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
+    temp_path.replace(path)
+
+
+def read_existing_rows(path):
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def dedupe_rows(rows):
+    deduped = []
+    seen = set()
+    for row in rows:
+        key = (row.get("restaurant_id", ""), row.get("review_text", ""))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def review_counts_by_restaurant(rows):
+    counts = {}
+    for row in rows:
+        restaurant_id = row.get("restaurant_id", "")
+        if restaurant_id:
+            counts[restaurant_id] = counts.get(restaurant_id, 0) + 1
+    return counts
 
 
 def main():
     plan = load_plan()
     output_path = ROOT / plan["output_path"]
-    all_rows = []
+    all_rows = dedupe_rows(read_existing_rows(output_path))
+    if all_rows:
+        print(f"[resume] loaded {len(all_rows)} existing reviews from {output_path}")
 
     driver = make_driver(headless=False)
     try:
@@ -256,9 +288,14 @@ def main():
                 places = search_places(driver, area, category, plan["restaurants_per_group"])
                 print(f"[found] {len(places)} places")
                 for idx, place in enumerate(places, start=1):
+                    existing_counts = review_counts_by_restaurant(all_rows)
+                    if existing_counts.get(place.place_id, 0) >= plan["reviews_per_restaurant"]:
+                        print(f"[skip] {area} {category} {idx}/{len(places)} {place.name} already collected")
+                        continue
+
                     print(f"[reviews] {area} {category} {idx}/{len(places)} {place.name}")
                     rows = collect_place_reviews(driver, place, area, category, plan["reviews_per_restaurant"])
-                    all_rows.extend(rows)
+                    all_rows = dedupe_rows(all_rows + rows)
                     write_rows(output_path, all_rows)
                     time.sleep(1.0)
     finally:
