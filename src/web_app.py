@@ -393,6 +393,30 @@ HTML = r"""
 
       <div class="row">
         <div>
+          <label for="category">음식 종류</label>
+          <select id="category">
+            <option>상관없음</option>
+            <option>한식</option>
+            <option>일식</option>
+            <option>중식</option>
+            <option>양식</option>
+            <option>카페 디저트</option>
+            <option>주점 바</option>
+          </select>
+        </div>
+        <div>
+          <label for="priority">우선 조건</label>
+          <select id="priority">
+            <option>균형</option>
+            <option>맛</option>
+            <option>가성비</option>
+            <option>분위기</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
           <label for="genderMix">성비</label>
           <select id="genderMix">
             <option>상관없음</option>
@@ -465,8 +489,11 @@ HTML = r"""
       if (text.includes("건대")) parsed.area = "건대";
       if (text.includes("잠실")) parsed.area = "잠실";
 
+      let romanticMentioned = false;
       if (includesAny(text, ["여자친구", "남자친구", "연인", "데이트", "애인"])) {
         parsed.relation = "연인";
+        parsed.partySize = 2;
+        romanticMentioned = true;
       } else if (includesAny(text, ["회사", "상사", "팀장", "미팅", "비즈니스", "회식", "거래처"])) {
         parsed.relation = "비즈니스";
       } else if (includesAny(text, ["친구", "친한친구", "동기", "애들", "친구들"])) {
@@ -480,10 +507,29 @@ HTML = r"""
       }
 
       const partySize = parsePartySize(text);
-      if (partySize) parsed.partySize = partySize;
+      if (partySize && !romanticMentioned) parsed.partySize = partySize;
 
-      const hasMale = text.includes("남자");
-      const hasFemale = text.includes("여자");
+      if (includesAny(text, ["한식", "국밥", "고기", "삼겹살", "곱창", "찌개", "해장"])) {
+        parsed.category = "한식";
+      } else if (includesAny(text, ["일식", "초밥", "스시", "라멘", "이자카야", "사시미", "오마카세"])) {
+        parsed.category = "일식";
+      } else if (includesAny(text, ["중식", "짜장", "짬뽕", "마라", "훠궈", "양꼬치", "탕수육"])) {
+        parsed.category = "중식";
+      } else if (includesAny(text, ["양식", "파스타", "스테이크", "피자", "브런치", "버거"])) {
+        parsed.category = "양식";
+      } else if (includesAny(text, ["카페", "디저트", "커피", "케이크", "빙수", "베이커리"])) {
+        parsed.category = "카페 디저트";
+      } else if (includesAny(text, ["술집", "주점", "바", "포차", "맥주집", "와인바"])) {
+        parsed.category = "주점 바";
+      }
+
+      if (includesAny(text, ["맛있는", "맛있", "맛집", "잘하는"])) parsed.priority = "맛";
+      else if (includesAny(text, ["가성비", "저렴", "싸", "부담없는"])) parsed.priority = "가성비";
+      else if (includesAny(text, ["분위기", "감성", "무드", "예쁜"])) parsed.priority = "분위기";
+
+      const genderText = text.replaceAll("남자친구", "").replaceAll("여자친구", "");
+      const hasMale = genderText.includes("남자");
+      const hasFemale = genderText.includes("여자");
       if (hasMale && hasFemale) parsed.genderMix = "반반";
       else if (hasMale) parsed.genderMix = "남자 위주";
       else if (hasFemale) parsed.genderMix = "여자 위주";
@@ -500,6 +546,8 @@ HTML = r"""
       if (parsed.relation) $("relation").value = parsed.relation;
       if (parsed.occasion) $("occasion").value = parsed.occasion;
       if (parsed.partySize) $("partySize").value = parsed.partySize;
+      if (parsed.category) $("category").value = parsed.category;
+      if (parsed.priority) $("priority").value = parsed.priority;
       if (parsed.genderMix) $("genderMix").value = parsed.genderMix;
       if (parsed.atmosphere) $("atmosphere").value = parsed.atmosphere;
       renderChips(parsed);
@@ -512,13 +560,22 @@ HTML = r"""
         : `<span class="chip">인식된 조건 없음</span>`;
     }
 
-    function scoreRestaurant(restaurant, scoreColumn, partySize, atmosphere) {
+    function scoreRestaurant(restaurant, scoreColumn, partySize, atmosphere, priority) {
       let score = Number(restaurant[scoreColumn] || 0);
       const reasons = [`모델 적합도 ${(score * 100).toFixed(1)}점`];
 
+      const taste = Number(restaurant.taste_score || 0);
+      const value = Number(restaurant.value_score || 0);
+      const spaciousness = Number(restaurant.spaciousness_score || 0.5);
+      const noise = Number(restaurant.noise_score || 0.5);
+
+      if (taste >= 0.8) reasons.push("맛 점수 높음");
+      if (value >= 0.7) reasons.push("가성비 점수 높음");
+      if (restaurant.collected_review_count >= 30) reasons.push("리뷰 근거 충분");
+
       if (partySize >= 5) {
         const groupBoost = restaurant.seat_type.includes("group") ? 0.08 : 0;
-        const spaciousBoost = Number(restaurant.spaciousness_score || 0) * 0.04;
+        const spaciousBoost = spaciousness * 0.04;
         score += groupBoost + spaciousBoost;
         if (groupBoost) reasons.push("단체석 언급");
       } else if (partySize === 2 && restaurant.seat_type.includes("couple")) {
@@ -527,14 +584,25 @@ HTML = r"""
       }
 
       if (atmosphere === "조용") {
-        score += (1 - Number(restaurant.noise_score || 0.5)) * 0.05;
+        score += (1 - noise) * 0.05;
         reasons.push("조용한 분위기 반영");
       } else if (atmosphere === "활기") {
-        score += Number(restaurant.noise_score || 0.5) * 0.05;
+        score += noise * 0.05;
         reasons.push("활기 있는 분위기 반영");
       } else if (atmosphere === "넓은 곳") {
-        score += Number(restaurant.spaciousness_score || 0.5) * 0.06;
+        score += spaciousness * 0.06;
         reasons.push("공간감 반영");
+      }
+
+      if (priority === "맛") {
+        score += taste * 0.07;
+        reasons.push("맛 우선 조건 반영");
+      } else if (priority === "가성비") {
+        score += value * 0.07;
+        reasons.push("가성비 우선 조건 반영");
+      } else if (priority === "분위기") {
+        score += ((1 - noise) * 0.03) + (spaciousness * 0.03);
+        reasons.push("분위기 우선 조건 반영");
       }
 
       return { score: Math.min(score, 1), reasons };
@@ -545,18 +613,21 @@ HTML = r"""
       const relation = $("relation").value;
       const occasion = $("occasion").value;
       const partySize = Number($("partySize").value || 1);
+      const category = $("category").value;
+      const priority = $("priority").value;
       const atmosphere = $("atmosphere").value;
       const label = `${relation}_${occasion}`;
       const scoreColumn = labelMap[label];
 
       const results = restaurants
         .filter((item) => item.area === area)
-        .map((item) => ({ ...item, ...scoreRestaurant(item, scoreColumn, partySize, atmosphere) }))
+        .filter((item) => category === "상관없음" || item.category === category)
+        .map((item) => ({ ...item, ...scoreRestaurant(item, scoreColumn, partySize, atmosphere, priority) }))
         .sort((a, b) => b.score - a.score)
         .slice(0, 10);
 
       $("summaryTitle").textContent = `${area} · ${relation} · ${occasion}`;
-      $("summaryText").textContent = `${partySize}명, ${$("genderMix").value}, ${atmosphere} 조건으로 정렬했어.`;
+      $("summaryText").textContent = `${partySize}명, ${$("genderMix").value}, ${category}, ${atmosphere}, ${priority} 조건으로 정렬했어.`;
 
       if (results.length === 0) {
         $("resultList").innerHTML = `<div class="panel empty">조건에 맞는 추천 결과가 없어.</div>`;
